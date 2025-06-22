@@ -1,53 +1,142 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.20;
+// SPDX-License-Identifier: GPL-3.0
 
-import "@openzeppelin/contracts-upgradeable/token/ERC20/ERC20Upgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20BurnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PausableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/ERC20PermitUpgradeable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/Initializable.sol";
-import "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
+pragma solidity ^0.8.30;
 
-contract MyToken is Initializable, ERC20Upgradeable, ERC20BurnableUpgradeable, ERC20PausableUpgradeable, OwnableUpgradeable, ERC20PermitUpgradeable, UUPSUpgradeable {
-    /// @custom:oz-upgrades-unsafe-allow constructor
-    constructor() {
-        _disableInitializers();
+/**
+ * Math operations with safety checks
+ */
+contract SafeMath {
+  function safeMul(uint256 a, uint256 b) pure internal returns (uint256) {
+    uint256 c = a * b;
+    assert(a == 0 || c / a == b);
+    return c;
+  }
+
+  function safeDiv(uint256 a, uint256 b) pure internal returns (uint256) {
+    assert(b > 0);
+    uint256 c = a / b;
+    assert(a == b * c + a % b);
+    return c;
+  }
+
+  function safeSub(uint256 a, uint256 b) pure internal returns (uint256) {
+    assert(b <= a);
+    return a - b;
+  }
+
+  function safeAdd(uint256 a, uint256 b) pure internal returns (uint256) {
+    uint256 c = a + b;
+    assert(c>=a && c>=b);
+    return c;
+  }
+
+}
+contract PCE is SafeMath{
+    string public name;
+    string public symbol;
+    uint8 public decimals;
+    uint256 public totalSupply;
+	address public owner;
+
+    /* This creates an array with all balances */
+    mapping (address => uint256) public balanceOf;
+	mapping (address => uint256) public freezeOf;
+    mapping (address => mapping (address => uint256)) public allowance;
+
+    /* This generates a public event on the blockchain that will notify clients */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    /* This notifies clients about the amount burnt */
+    event Burn(address indexed from, uint256 value);
+	
+	/* This notifies clients about the amount frozen */
+    event Freeze(address indexed from, uint256 value);
+	
+	/* This notifies clients about the amount unfrozen */
+    event Unfreeze(address indexed from, uint256 value);
+
+    /* Initializes contract with initial supply tokens to the creator of the contract */
+    constructor (
+        uint256  _initialSupply,//发行数量
+        string memory  _tokenName,//代币名称
+        uint8  _decimalUnits,//精度
+        string memory  _tokenSymbol//代币简称
+        )  {
+        balanceOf[msg.sender] = _initialSupply;              // Give the creator all initial tokens
+        totalSupply = _initialSupply;                        // Update total supply
+        name = _tokenName;                                   // Set the name for display purposes
+        symbol = _tokenSymbol;                               // Set the symbol for display purposes
+        decimals = _decimalUnits;                            // Amount of decimals for display purposes
+		owner = msg.sender;
     }
 
-    function initialize(address initialOwner) initializer public {
-        __ERC20_init("MyToken", "MTK");
-        __ERC20Burnable_init();
-        __ERC20Pausable_init();
-        __Ownable_init(initialOwner);
-        __ERC20Permit_init("MyToken");
-        __UUPSUpgradeable_init();
+    /* Send coins */
+    function transfer(address _to, uint256 _value) public {
+        require(_to != address(0x0));                               // Prevent transfer to 0x0 address. Use burn() instead
+		require(_value >= 0); 
+        require(balanceOf[msg.sender] >= _value);        // Check if the sender has enough
+        require(balanceOf[_to] + _value >= balanceOf[_to]);  // Check for overflows
+        balanceOf[msg.sender] = SafeMath.safeSub(balanceOf[msg.sender], _value);                     // Subtract from the sender
+        balanceOf[_to] = SafeMath.safeAdd(balanceOf[_to], _value);                            // Add the same to the recipient
+        emit Transfer(msg.sender, _to, _value);                   // Notify anyone listening that this transfer took place
     }
 
-    function pause() public onlyOwner {
-        _pause();
+    /* Allow another contract to spend some tokens in your behalf */
+    function approve(address _spender, uint256 _value) public returns (bool success) {
+		require(_value > 0); 
+        allowance[msg.sender][_spender] = _value;
+        return true;
+    }
+       
+
+    /* A contract attempts to get the coins */
+    function transferFrom(address _from, address _to, uint256 _value) public returns (bool success) {
+        require(_to != address(0x0));                                // Prevent transfer to 0x0 address. Use burn() instead
+		require(_value > 0); 
+        require(balanceOf[_from] >= _value);                 // Check if the sender has enough
+        require(balanceOf[_to] + _value >= balanceOf[_to]);  // Check for overflows
+        require(_value <= allowance[_from][msg.sender]);     // Check allowance
+        balanceOf[_from] = SafeMath.safeSub(balanceOf[_from], _value);                           // Subtract from the sender
+        balanceOf[_to] = SafeMath.safeAdd(balanceOf[_to], _value);                             // Add the same to the recipient
+        allowance[_from][msg.sender] = SafeMath.safeSub(allowance[_from][msg.sender], _value);
+        emit Transfer(_from, _to, _value);
+        return true;
     }
 
-    function unpause() public onlyOwner {
-        _unpause();
+    function burn(uint256 _value) public returns (bool success) {
+        require(balanceOf[msg.sender] >= _value);            // Check if the sender has enough
+		require(_value > 0); 
+        balanceOf[msg.sender] = SafeMath.safeSub(balanceOf[msg.sender], _value);                      // Subtract from the sender
+        totalSupply = SafeMath.safeSub(totalSupply,_value);                                // Updates totalSupply
+        emit Burn(msg.sender, _value);
+        return true;
     }
-
-    function mint(address to, uint256 amount) public onlyOwner {
-        _mint(to, amount);
+	
+	function freeze(uint256 _value) public returns (bool success) {
+        require(balanceOf[msg.sender] >= _value);            // Check if the sender has enough
+		require(_value > 0); 
+        balanceOf[msg.sender] = SafeMath.safeSub(balanceOf[msg.sender], _value);                      // Subtract from the sender
+        freezeOf[msg.sender] = SafeMath.safeAdd(freezeOf[msg.sender], _value);                                // Updates totalSupply
+        emit Freeze(msg.sender, _value);
+        return true;
     }
-
-    function _authorizeUpgrade(address newImplementation)
-        internal
-        onlyOwner
-        override
-    {}
-
-    // The following functions are overrides required by Solidity.
-
-    function _update(address from, address to, uint256 value)
-        internal
-        override(ERC20Upgradeable, ERC20PausableUpgradeable)
-    {
-        super._update(from, to, value);
+	
+	function unfreeze(uint256 _value) public returns (bool success) {
+        require(freezeOf[msg.sender] >= _value);            // Check if the sender has enough
+		require(_value > 0); 
+        freezeOf[msg.sender] = SafeMath.safeSub(freezeOf[msg.sender], _value);                      // Subtract from the sender
+		balanceOf[msg.sender] = SafeMath.safeAdd(balanceOf[msg.sender], _value);
+        emit Unfreeze(msg.sender, _value);
+        return true;
+    }
+	
+	// transfer balance to owner
+	function withdrawEther(uint256 amount) public {
+		require(msg.sender == owner);
+		payable (owner).transfer(amount);
+	}
+	
+	// can accept ether
+	function pay() public payable {
     }
 }
